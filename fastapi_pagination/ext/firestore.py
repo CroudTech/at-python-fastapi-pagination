@@ -104,7 +104,7 @@ def _build_previous_page_query_dynamic(
         if orders
         else [  # Reverse the default order
             StructuredQuery.Order(
-                field="__name__",
+                field=StructuredQuery.FieldReference("__name__"),
                 direction=StructuredQuery.Direction.DESCENDING,
             )
         ]
