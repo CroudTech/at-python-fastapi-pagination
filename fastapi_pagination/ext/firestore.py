@@ -16,6 +16,8 @@ from google.cloud.firestore_v1 import (
     Query,
     Transaction,
 )
+from google.cloud.firestore_v1.types import StructuredQuery
+from typing import List
 from google.cloud.firestore_v1.aggregation import AggregationQuery
 from google.cloud.firestore_v1.async_aggregation import AsyncAggregationQuery
 from typing_extensions import TypeAlias
@@ -24,8 +26,17 @@ from fastapi_pagination.bases import AbstractParams, CursorRawParams, RawParams
 from fastapi_pagination.config import Config
 from fastapi_pagination.ext.utils import generic_query_apply_params
 from fastapi_pagination.flow import AnyFlow, Flow, flow, run_async_flow, run_sync_flow
-from fastapi_pagination.flows import CursorFlow, LimitOffsetFlow, TotalFlow, generic_flow
-from fastapi_pagination.types import AdditionalData, ItemsTransformer, SyncItemsTransformer
+from fastapi_pagination.flows import (
+    CursorFlow,
+    LimitOffsetFlow,
+    TotalFlow,
+    generic_flow,
+)
+from fastapi_pagination.types import (
+    AdditionalData,
+    ItemsTransformer,
+    SyncItemsTransformer,
+)
 
 TQuery = TypeVar("TQuery", Query, AsyncQuery)
 
@@ -45,8 +56,71 @@ def _apply_cursor(
     return query
 
 
-def _convert_raw_items(items: Sequence[DocumentSnapshot], /) -> Sequence[dict[str, Any]]:
+def _convert_raw_items(
+    items: Sequence[DocumentSnapshot], /
+) -> Sequence[dict[str, Any]]:
     return [(doc.to_dict() or {}) | {"id": str(doc.id)} for doc in items]
+
+
+def _reverse_direction(
+    direction: StructuredQuery.Direction,
+) -> StructuredQuery.Direction:
+    return (
+        StructuredQuery.Direction.DESCENDING
+        if direction == StructuredQuery.Direction.ASCENDING
+        else StructuredQuery.Direction.ASCENDING
+    )
+
+
+def _build_previous_page_query_dynamic(
+    current_query: Query,
+    first_item_snapshot: DocumentSnapshot,
+    page_size: Optional[int],
+) -> Query:
+    """
+    Builds a previous-page query based on the internal ordering of an existing query.
+
+    :param current_query: Firestore query used to get the current page (must already include ordering)
+    :param first_item_snapshot: Snapshot of the first document in the current page
+    :param page_size: Number of documents per page
+    :return: Query object that will return the previous page (you must reverse the result list)
+    """
+    # Extract the collection from the query
+    collection: CollectionReference = current_query._parent
+
+    # Extract the filters from the original query
+    filters = current_query._field_filters
+
+    # Extract and reverse the order_by fields
+    orders: List[StructuredQuery.Order] = current_query._orders or []
+    reversed_orders = [
+        StructuredQuery.Order(
+            field=order.field,
+            direction=_reverse_direction(order.direction),
+        )
+        for order in orders
+    ]
+
+    # Build new query from scratch
+    prev_query = collection
+
+    if filters:
+        for f in filters:
+            prev_query = prev_query.where(filter=f)
+
+    for order in reversed_orders:
+        prev_query = prev_query.order_by(
+            order.field.field_path,
+            direction=order.direction.name,  # "ASCENDING" or "DESCENDING"
+        )
+
+    # Apply end_before on the first document of the current page
+    if first_item_snapshot is not None:
+        prev_query = prev_query.end_at(first_item_snapshot)
+    if page_size is not None:
+        prev_query = prev_query.limit(page_size + 1)
+
+    return prev_query
 
 
 @flow
@@ -104,14 +178,27 @@ def _cursor_flow(
     transaction: Optional[AnyTransaction],
     raw_params: CursorRawParams,
 ) -> CursorFlow:
+    meta = {}
+
+    # Run current page query
     snapshot = yield from _fetch_cursor(query, raw_params, transaction)
+    if snapshot:
+        meta["current_"] = snapshot.id
+
     query = _apply_cursor(query, raw_params, snapshot)  # type: ignore[type-var]
     items = yield query.get(transaction=transaction)  # type: ignore[arg-type]
-
     if items:
-        return items, {"next_": items[-1].id}
+        meta["next_"] = items[-1].id
 
-    return items, None
+    # Run previous page query
+    previous_page_query = _build_previous_page_query_dynamic(
+        query, snapshot, raw_params.size
+    )
+    prev_items = yield previous_page_query.get(transaction=transaction)  # type: ignore[arg-type]
+    if raw_params.size is not None and (len(prev_items) > raw_params.size):
+        meta["previous_"] = prev_items[-1].id
+
+    return items, meta
 
 
 @flow
