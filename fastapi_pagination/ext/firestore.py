@@ -183,7 +183,7 @@ def _cursor_flow(
     # Run current page query
     snapshot = yield from _fetch_cursor(query, raw_params, transaction)
     if snapshot:
-        meta["current_"] = snapshot.id
+        meta["current"] = snapshot.id
 
     query = _apply_cursor(query, raw_params, snapshot)  # type: ignore[type-var]
     items = yield query.get(transaction=transaction)  # type: ignore[arg-type]
@@ -196,7 +196,7 @@ def _cursor_flow(
     )
     prev_items = yield previous_page_query.get(transaction=transaction)  # type: ignore[arg-type]
     if raw_params.size is not None and (len(prev_items) > raw_params.size):
-        meta["previous_"] = prev_items[-1].id
+        meta["previous"] = prev_items[-1].id
 
     return items, meta
 
