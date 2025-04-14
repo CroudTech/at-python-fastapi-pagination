@@ -93,13 +93,22 @@ def _build_previous_page_query_dynamic(
 
     # Extract and reverse the order_by fields
     orders: List[StructuredQuery.Order] = current_query._orders or []
-    reversed_orders = [
-        StructuredQuery.Order(
-            field=order.field,
-            direction=_reverse_direction(order.direction),
-        )
-        for order in orders
-    ]
+    reversed_orders = (
+        [
+            StructuredQuery.Order(
+                field=order.field,
+                direction=_reverse_direction(order.direction),
+            )
+            for order in orders
+        ]
+        if orders
+        else [  # Reverse the default order
+            StructuredQuery.Order(
+                field="__name__",
+                direction=StructuredQuery.Direction.DESCENDING,
+            )
+        ]
+    )
 
     # Build new query from scratch
     prev_query = collection
@@ -113,7 +122,6 @@ def _build_previous_page_query_dynamic(
             order.field.field_path,
             direction=order.direction.name,  # "ASCENDING" or "DESCENDING"
         )
-
     # Apply end_at on the first document of the current page
     if first_item_snapshot is not None:
         prev_query = prev_query.end_at(first_item_snapshot)
