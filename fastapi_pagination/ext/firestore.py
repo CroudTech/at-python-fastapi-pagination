@@ -114,7 +114,7 @@ def _build_previous_page_query_dynamic(
             direction=order.direction.name,  # "ASCENDING" or "DESCENDING"
         )
 
-    # Apply end_before on the first document of the current page
+    # Apply end_at on the first document of the current page
     if first_item_snapshot is not None:
         prev_query = prev_query.end_at(first_item_snapshot)
     if page_size is not None:
@@ -196,7 +196,7 @@ def _cursor_flow(
     )
     prev_items = yield previous_page_query.get(transaction=transaction)  # type: ignore[arg-type]
     if raw_params.size is not None and (len(prev_items) > raw_params.size):
-        meta["previous"] = prev_items[-1].id
+        meta["previous"] = prev_items[0].id
 
     return items, meta
 
